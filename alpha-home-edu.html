@@ -198,6 +198,18 @@ h1 { font-size: 1.6em; margin-bottom: 4px; }
 .checkin-card { background: #fff; border: 1px solid #e0e0e0; border-radius: 12px; padding: 14px 16px; margin-bottom: 12px; }
 .checkin-done-list { display: flex; flex-wrap: wrap; gap: 5px; margin: 6px 0; }
 .done-chip { background: #f0fdf4; border: 1px solid #86efac; color: #166534; border-radius: 12px; padding: 2px 9px; font-size: 0.74em; }
+/* Profile tab */
+.profile-cols { display: flex; gap: 16px; align-items: flex-start; }
+.profile-col { flex: 1; min-width: 0; }
+.profile-col-header { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+.profile-section { margin-bottom: 14px; }
+.profile-section-label { font-size: 0.72em; color: #888; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; }
+.profile-moment { font-size: 0.82em; color: #444; font-style: italic; margin-bottom: 6px; line-height: 1.45; border-left: 2px solid #c7d2fe; padding-left: 8px; }
+.profile-milestone { font-size: 0.8em; color: #444; margin-bottom: 4px; }
+.milestone-date { color: #94a3b8; font-size: 0.88em; margin-right: 5px; }
+.profile-empty { font-size: 0.78em; color: #bbb; font-style: italic; }
+.profile-notes-ta { width: 100%; box-sizing: border-box; padding: 8px; border: 1px solid #ddd; border-radius: 6px; font-size: 0.82em; min-height: 80px; resize: vertical; color: #333; font-family: inherit; }
+@media (max-width: 520px) { .profile-cols { flex-direction: column; } }
 /* Comments tab */
 .comment-card { background: #fff; border: 1px solid #e0e0e0; border-radius: 10px; padding: 10px 14px; margin-bottom: 8px; }
 .comment-meta { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 4px; }
@@ -321,7 +333,7 @@ h1 { font-size: 1.6em; margin-bottom: 4px; }
 <div class="tab-bar">
   <button class="tab-btn active" onclick="showTab('rhythm')">Today</button>
   <button class="tab-btn" onclick="showTab('checkin')">Check-in</button>
-  <button class="tab-btn" onclick="showTab('yesterday')">Yesterday</button>
+  <button class="tab-btn" onclick="showTab('yesterday')">Profile</button>
   <button class="tab-btn" onclick="showTab('comments')">Comments</button>
   <button class="tab-btn" onclick="showTab('history')">History</button>
   <button class="tab-btn" onclick="showTab('library')">Library</button>
@@ -1270,7 +1282,7 @@ function syncPull() {
       const journalPanel = document.getElementById('tab-journal');
       if (journalPanel && journalPanel.classList.contains('active')) renderJournal();
       const yesterdayPanel = document.getElementById('tab-yesterday');
-      if (yesterdayPanel && yesterdayPanel.classList.contains('active')) renderYesterday();
+      if (yesterdayPanel && yesterdayPanel.classList.contains('active')) renderProfile();
       const commentsPanel = document.getElementById('tab-comments');
       if (commentsPanel && commentsPanel.classList.contains('active')) renderComments();
       const eventsPanel = document.getElementById('tab-events');
@@ -1352,7 +1364,7 @@ function showTab(name) {
   event.target.classList.add('active');
   if (name === 'library') renderLibrary();
   if (name === 'about') renderAbout();
-  if (name === 'yesterday') renderYesterday();
+  if (name === 'yesterday') renderProfile();
   if (name === 'comments') renderComments();
   if (name === 'history') renderHistory();
   if (name === 'checkin') renderCheckin();
@@ -2198,48 +2210,145 @@ function exportHTML() {
     });
 }
 
-// ── YESTERDAY ─────────────────────────────────────────────────────────────────
+// ── PROFILE ───────────────────────────────────────────────────────────────────
 
-function renderYesterday() {
+var _profileNotesTimers = {};
+
+function profileNotesScheduleSave(childId, val) {
+  clearTimeout(_profileNotesTimers[childId]);
+  _profileNotesTimers[childId] = setTimeout(function() { profileNotesSave(childId, val); }, 800);
+}
+
+function profileNotesSave(childId, val) {
+  if (!appState.profile) appState.profile = {};
+  if (!appState.profile[childId]) appState.profile[childId] = { computed: {}, notes: '' };
+  appState.profile[childId].notes = val;
+  saveState();
+}
+
+function renderProfile() {
   const el = document.getElementById('tab-yesterday');
-  const today = new Date().toISOString().slice(0,10);
-  const ydate = new Date(Date.now() - 86400000).toISOString().slice(0,10);
-  const checkins = (appState.checkins || []).filter(c => c.date === ydate);
-  if (!checkins.length) {
-    el.innerHTML = `<div class="card-sm" style="color:#888">No check-in data for ${ydate}. Run /kids-checkin tonight to log today.</div>`;
-    return;
-  }
-  let html = `<h3 style="margin:0 0 12px;font-size:1em;color:#555">${ydate}</h3>`;
-  checkins.forEach(ci => {
-    const child = CHILDREN.find(c => c.id === ci.child_id) || { name: ci.child_id, avatar: '?', avClass: '' };
-    const done = ci.done || [];
-    const planned = ci.planned || [];
-    const ratings = ci.ratings || {};
-    html += `<div class="checkin-card">
-      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
-        <div class="child-avatar ${child.avClass}" style="width:28px;height:28px;font-size:0.8em">${child.avatar}</div>
-        <strong>${child.name}</strong>
+
+  function childColHtml(child) {
+    const prof = (appState.profile || {})[child.id] || {};
+    const comp = prof.computed || {};
+    const notes = prof.notes || '';
+
+    // Stage from DOB using AGE_STAGES
+    const ageMs = Date.now() - new Date(child.dob).getTime();
+    const ageMonths = Math.floor(ageMs / (1000 * 60 * 60 * 24 * 30.44));
+    const stageObj = [...AGE_STAGES].reverse().find(s => ageMonths >= s.monthsMin) || AGE_STAGES[0];
+
+    // Moments
+    const moments = comp.moments || [];
+    const momentsHtml = moments.length
+      ? moments.slice(0, 5).map(m => `<div class="profile-moment">"${m.slice(0, 250)}"</div>`).join('')
+      : '<div class="profile-empty">No moments yet — check-ins build this over time.</div>';
+
+    // Milestones
+    const milestones = comp.milestones || [];
+    const milestonesHtml = milestones.length
+      ? milestones.slice(0, 8).map(m => `<div class="profile-milestone"><span class="milestone-date">${m.date}</span>${m.text}</div>`).join('')
+      : '<div class="profile-empty">No milestones logged yet.</div>';
+
+    // Pillar coverage bars
+    const pillarCov = comp.pillarCoverage || {};
+    const pillarOrder = ['grit', 'relationships', 'teamwork', 'entrepreneurship', 'storytelling'];
+    const hasPillarData = pillarOrder.some(k => pillarCov[k]);
+    const pillarsHtml = hasPillarData
+      ? pillarOrder.map(key => {
+          const pct = pillarCov[key] || 0;
+          const info = PILLARS[key] || { label: key, color: '#94a3b8' };
+          return `<div style="margin:5px 0">
+            <div style="display:flex;justify-content:space-between;font-size:0.75em;color:#555;margin-bottom:2px">
+              <span>${info.label}</span><span>${pct}%</span>
+            </div>
+            <div style="background:#f1f5f9;border-radius:4px;height:7px">
+              <div style="background:${info.color};width:${Math.min(pct, 100)}%;height:7px;border-radius:4px"></div>
+            </div>
+          </div>`;
+        }).join('')
+      : '<div class="profile-empty">Pillar data builds as spontaneous activities are logged.</div>';
+
+    const lastUp = comp.lastUpdated ? comp.lastUpdated.slice(0, 10) : null;
+    const footerText = lastUp
+      ? `<div style="font-size:0.7em;color:#bbb;margin-top:6px">Profile updated ${lastUp}</div>`
+      : `<div style="font-size:0.7em;color:#bbb;margin-top:6px">Profile builds nightly from check-ins. Run /kids-checkin to start.</div>`;
+
+    return `
+      <div class="profile-col">
+        <div class="profile-col-header">
+          <div class="child-avatar ${child.avClass}">${child.avatar}</div>
+          <div>
+            <div style="font-weight:700;font-size:1em">${child.name}</div>
+            <div style="font-size:0.75em;margin-top:3px">
+              <span style="background:#e0edff;color:#2563eb;padding:2px 8px;border-radius:10px">${stageObj.label}</span>
+              <span style="color:#aaa;margin-left:5px">${stageObj.subtitle}</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="profile-section">
+          <div class="profile-section-label">Recent Moments</div>
+          ${momentsHtml}
+        </div>
+
+        <div class="profile-section">
+          <div class="profile-section-label">Milestones (30 days)</div>
+          ${milestonesHtml}
+        </div>
+
+        <div class="profile-section">
+          <div class="profile-section-label">Pillar Coverage (30 days)</div>
+          ${pillarsHtml}
+        </div>
+
+        <div class="profile-section">
+          <div class="profile-section-label">Personality / Notes</div>
+          <textarea
+            id="profile-notes-${child.id}"
+            class="profile-notes-ta"
+            placeholder="Favorite foods, current obsessions, things to remember, growth observations..."
+            oninput="profileNotesScheduleSave('${child.id}', this.value)"
+          >${notes}</textarea>
+        </div>
+        ${footerText}
       </div>`;
-    if (done.length) {
-      html += `<div style="margin-bottom:8px"><span style="font-size:0.78em;color:#888;font-weight:600">DONE</span><div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:4px">`;
-      done.forEach(id => {
-        const act = ACTIVITIES.find(a => a.id === id);
-        const r = ratings[id];
-        html += `<span class="done-chip">${act ? act.title : id}${r ? ' ' + '★'.repeat(r) : ''}</span>`;
-      });
-      html += `</div></div>`;
-    }
-    if ((ci.spontaneous || []).length) {
-      html += `<div style="margin-bottom:8px"><span style="font-size:0.78em;color:#888;font-weight:600">SPONTANEOUS</span><div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:4px">`;
-      (ci.spontaneous || []).forEach(s => { html += `<span class="done-chip" style="background:#f0fdf4;color:#15803d">${s.title}</span>`; });
-      html += `</div></div>`;
-    }
-    if (ci.openQuestion) {
-      html += `<div style="font-size:0.82em;color:#555;margin-top:6px"><em>Q: ${ci.openQuestion}</em><br><strong>A:</strong> ${ci.openAnswer || '—'}</div>`;
-    }
-    html += `</div>`;
-  });
-  el.innerHTML = html;
+  }
+
+  // Yesterday check-in collapsed at the bottom
+  const ydate = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+  const yCheckins = (appState.checkins || []).filter(c => c.date === ydate);
+  let yesterdayHtml = '';
+  if (yCheckins.length) {
+    let inner = '';
+    yCheckins.forEach(ci => {
+      const ch = CHILDREN.find(c => c.id === ci.child_id) || { name: ci.child_id, avatar: '?', avClass: '' };
+      const done = ci.done || [];
+      const ratings = ci.ratings || {};
+      inner += `<div style="margin-bottom:8px"><strong>${ch.name}</strong>`;
+      if (done.length) {
+        inner += `<div style="display:flex;flex-wrap:wrap;gap:4px;margin:4px 0">`;
+        done.forEach(id => {
+          const act = ACTIVITIES.find(a => a.id === id);
+          const r = ratings[id];
+          inner += `<span class="done-chip">${act ? act.title : id}${r ? ' ' + '\u2605'.repeat(r) : ''}</span>`;
+        });
+        inner += `</div>`;
+      }
+      if (ci.openQuestion) {
+        inner += `<div style="font-size:0.82em;color:#555;margin-top:4px"><em>${ci.openQuestion}</em><br><strong>A:</strong> ${ci.openAnswer || '\u2014'}</div>`;
+      }
+      inner += `</div>`;
+    });
+    yesterdayHtml = `
+      <details style="margin-top:18px;border-top:1px solid #f0f0f0;padding-top:12px">
+        <summary style="font-size:0.82em;color:#aaa;cursor:pointer;user-select:none">Last night's check-in (${ydate})</summary>
+        <div style="margin-top:8px">${inner}</div>
+      </details>`;
+  }
+
+  el.innerHTML = `<div class="profile-cols">${CHILDREN.map(childColHtml).join('')}</div>${yesterdayHtml}`;
 }
 
 // ── COMMENTS ──────────────────────────────────────────────────────────────────
