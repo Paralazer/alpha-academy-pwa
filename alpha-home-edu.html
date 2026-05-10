@@ -297,7 +297,6 @@ h1 { font-size: 1.6em; margin-bottom: 4px; }
 .ci-act-desc { font-size: 0.85em; color: #666; font-style: italic; margin-top: 2px; }
 .ci-pick-btn { font-size: 0.72em; padding: 2px 7px; border-radius: 10px; border: 1px solid #cbd5e1; background: #f1f5f9; color: #64748b; cursor: pointer; margin-left: 6px; vertical-align: middle; }
 .ci-pick-btn.picked { background: #0078d4; color: #fff; border-color: #0078d4; }
-.ci-activity.unpicked { opacity: 0.45; }
 .ci-from-whatsapp { border-left: 3px solid #f59e0b !important; background: #fffbeb !important; }
 .ci-wa-badge { font-size: 0.68em; background: #fef3c7; color: #92400e; border: 1px solid #f59e0b; border-radius: 4px; padding: 1px 5px; margin-left: 5px; }
 .ci-done-check { font-size: 13px; white-space: nowrap; }
@@ -1646,10 +1645,24 @@ function renderRhythm() {
     const showElaina = childF === 'all' || childF === 'elaina';
 
     if (childF === 'all') {
-      html += `<div class="two-col">
-        <div>${renderChildRhythm(CHILDREN[0], false, pillar)}</div>
-        <div>${renderChildRhythm(CHILDREN[1], false, pillar)}</div>
+      const todayStr = new Date().toISOString().slice(0,10);
+      const todayPlan = (appState.dailyPlans || {})[todayStr] || null;
+      const ethanStage = currentStage(CHILDREN[0].dob);
+      const elainaStage = currentStage(CHILDREN[1].dob);
+      html += `<div class="two-col" style="margin-bottom:8px">
+        <div class="child-col-header"><div class="child-avatar ethan-av">E</div>Ethan <span style="font-weight:400;font-size:0.82em;color:#666">${ethanStage.label}</span></div>
+        <div class="child-col-header"><div class="child-avatar elaina-av">El</div>Elaina <span style="font-weight:400;font-size:0.82em;color:#666">${elainaStage.label}</span></div>
       </div>`;
+      RHYTHM_BLOCKS.forEach(block => {
+        const eHtml = renderChildBlock(CHILDREN[0], block, pillar, todayPlan);
+        const lHtml = renderChildBlock(CHILDREN[1], block, pillar, todayPlan);
+        if (!eHtml && !lHtml) return;
+        const placeholder = `<div class="rhythm-block" style="opacity:0.4"><div class="rhythm-header ${block.cls}"><span style="font-size:1.2em">${block.icon}</span><span class="rhythm-title">${block.label}</span></div><div style="font-size:0.78em;color:#aaa;padding:8px">No suggestions</div></div>`;
+        html += `<div class="two-col">
+          <div>${eHtml || placeholder}</div>
+          <div>${lHtml || placeholder}</div>
+        </div>`;
+      });
     } else if (showEthan) {
       const ethanHtml = renderChildRhythm(CHILDREN[0], false, pillar);
       html += `<div>${ethanHtml || '<p style="color:#aaa;font-size:13px;margin:12px 0">No activity suggestions for Ethan\'s stage today.</p>'}</div>`;
@@ -1700,6 +1713,58 @@ function dailyPlanForChildBlock(plan, childId, blockId) {
   return items;
 }
 
+function renderChildBlock(child, block, pillarFocus, todayPlan) {
+  const stage = currentStage(child.dob);
+  const todayStr = new Date().toISOString().slice(0,10);
+  let acts = ACTIVITIES.filter(a =>
+    a.block === block.id &&
+    a.stages.includes(stage.id) &&
+    (block.id !== 'morning-move' || a.location !== 'indoor' || child.id === 'elaina')
+  );
+  if (pillarFocus) {
+    acts.sort((a, b) => (b.pillar === pillarFocus ? 1 : 0) - (a.pillar === pillarFocus ? 1 : 0));
+  }
+  const rerollKey = ((appState.todayPicks || {})[todayStr] || {});
+  const childPicks = (rerollKey[child.id] || {})[block.id] || '';
+  const seed = todayStr + child.id + block.id + stage.id + childPicks;
+  acts = dateSeededShuffle(acts, seed);
+  acts = acts.filter(a => recentlyDoneFromCheckins(child.id, a.id, 7) < 2);
+  acts.sort((a, b) => combinedDoneScore(child.id, a.id) - combinedDoneScore(child.id, b.id));
+  acts = acts.slice(0, 3);
+
+  const lessonCard = block.id === 'learning' ? getTodayLesson(child.id, stage.id, todayStr) : null;
+  const planItems = dailyPlanForChildBlock(todayPlan, child.id, block.id);
+  if (!acts.length && !planItems.length && !lessonCard) return '';
+
+  let html = `<div class="rhythm-block">
+    <div class="rhythm-header ${block.cls}">
+      <span style="font-size:1.2em">${block.icon}</span>
+      <span class="rhythm-title">${block.label}</span>
+      <span class="rhythm-hint">${block.hint}</span>
+      <button onclick="rerollPicks('${child.id}','${block.id}')" title="Refresh picks" style="margin-left:8px;font-size:0.72em;background:none;border:1px solid #ccc;border-radius:10px;padding:1px 7px;cursor:pointer;color:#888">&#8635;</button>
+    </div>`;
+  if (lessonCard) { html += renderLessonCard(lessonCard); }
+  if (planItems.length) {
+    html += `<div style="margin-bottom:8px"><div style="font-size:0.72em;font-weight:700;color:#0078d4;letter-spacing:.4px;margin-bottom:4px;text-transform:uppercase">Today's Plan</div>`;
+    planItems.forEach((item, idx) => {
+      const optBadge = planItems.length > 1
+        ? `<span style="font-size:0.68em;font-weight:700;padding:1px 5px;border-radius:8px;margin-left:5px;${item.picked !== false ? 'background:#0078d4;color:#fff' : 'background:#e2e8f0;color:#64748b'}">${item.picked !== false ? 'Suggested' : 'Option ' + (idx + 1)}</span>`
+        : '';
+      html += `<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:6px;padding:7px 10px;margin-bottom:5px${item.picked === false ? ';opacity:0.6' : ''}">` +
+        `<div style="font-weight:600;font-size:0.85em">${item.title}${optBadge}</div>` +
+        (item.desc ? `<div style="font-size:0.78em;color:#666;font-style:italic;margin-top:2px">${item.desc}</div>` : '') +
+        `</div>`;
+    });
+    html += `</div>`;
+    if (acts.length) {
+      html += `<div style="font-size:0.72em;font-weight:700;color:#888;letter-spacing:.4px;margin-bottom:4px;text-transform:uppercase">More Ideas</div>`;
+    }
+  }
+  acts.forEach(a => { html += activityCard(a, child.id); });
+  html += `</div>`;
+  return html;
+}
+
 function renderChildRhythm(child, showAll=false, pillarFocus=null, innerOnly=false) {
   const stage = currentStage(child.dob);
   const todayStr = new Date().toISOString().slice(0,10);
@@ -1711,61 +1776,9 @@ function renderChildRhythm(child, showAll=false, pillarFocus=null, innerOnly=fal
       ${child.name} <span style="font-weight:400;font-size:0.82em;color:#666">${stage.label} · ${stage.subtitle}</span>
     </div>`;
   }
-
   RHYTHM_BLOCKS.forEach(block => {
-    let acts = ACTIVITIES.filter(a =>
-      a.block === block.id &&
-      a.stages.includes(stage.id) &&
-      (block.id !== 'morning-move' || a.location !== 'indoor' || child.id === 'elaina')
-    );
-    if (pillarFocus) {
-      acts.sort((a, b) => (b.pillar === pillarFocus ? 1 : 0) - (a.pillar === pillarFocus ? 1 : 0));
-    }
-    // Date-seeded shuffle — deterministic within a day, rolls each new day
-    const rerollKey = ((appState.todayPicks || {})[todayStr] || {});
-    const childPicks = (rerollKey[child.id] || {})[block.id] || '';
-    const seed = todayStr + child.id + block.id + stage.id + childPicks;
-    acts = dateSeededShuffle(acts, seed);
-    // Drop activities done 2+ times in last 7 days (cool-down)
-    acts = acts.filter(a => recentlyDoneFromCheckins(child.id, a.id, 7) < 2);
-    // Push high-combined-score activities to end so fresh ones surface first
-    acts.sort((a, b) => combinedDoneScore(child.id, a.id) - combinedDoneScore(child.id, b.id));
-    acts = acts.slice(0, 3);
-
-    // Today's Lesson card for learning block
-    const lessonCard = block.id === 'learning' ? getTodayLesson(child.id, stage.id, todayStr) : null;
-
-    const planItems = dailyPlanForChildBlock(todayPlan, child.id, block.id);
-    if (!acts.length && !planItems.length && !lessonCard) return;
-
-    html += `<div class="rhythm-block">
-      <div class="rhythm-header ${block.cls}">
-        <span style="font-size:1.2em">${block.icon}</span>
-        <span class="rhythm-title">${block.label}</span>
-        <span class="rhythm-hint">${block.hint}</span>
-        <button onclick="rerollPicks('${child.id}','${block.id}')" title="Refresh picks" style="margin-left:8px;font-size:0.72em;background:none;border:1px solid #ccc;border-radius:10px;padding:1px 7px;cursor:pointer;color:#888">&#8635;</button>
-      </div>`;
-    if (lessonCard) { html += renderLessonCard(lessonCard); }
-    if (planItems.length) {
-      html += `<div style="margin-bottom:8px"><div style="font-size:0.72em;font-weight:700;color:#0078d4;letter-spacing:.4px;margin-bottom:4px;text-transform:uppercase">Today's Plan</div>`;
-      planItems.forEach((item, idx) => {
-        const optBadge = planItems.length > 1
-          ? `<span style="font-size:0.68em;font-weight:700;padding:1px 5px;border-radius:8px;margin-left:5px;${item.picked !== false ? 'background:#0078d4;color:#fff' : 'background:#e2e8f0;color:#64748b'}">${item.picked !== false ? 'Suggested' : 'Option ' + (idx + 1)}</span>`
-          : '';
-        html += `<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:6px;padding:7px 10px;margin-bottom:5px${item.picked === false ? ';opacity:0.6' : ''}">` +
-          `<div style="font-weight:600;font-size:0.85em">${item.title}${optBadge}</div>` +
-          (item.desc ? `<div style="font-size:0.78em;color:#666;font-style:italic;margin-top:2px">${item.desc}</div>` : '') +
-          `</div>`;
-      });
-      html += `</div>`;
-      if (acts.length) {
-        html += `<div style="font-size:0.72em;font-weight:700;color:#888;letter-spacing:.4px;margin-bottom:4px;text-transform:uppercase">More Ideas</div>`;
-      }
-    }
-    acts.forEach(a => { html += activityCard(a, child.id); });
-    html += `</div>`;
+    html += renderChildBlock(child, block, pillarFocus, todayPlan);
   });
-
   return html;
 }
 
@@ -2486,6 +2499,11 @@ function renderHistory() {
   const month = new Date(Date.now() - 30*86400000).toISOString().slice(0,10);
   document.getElementById('hs-from').value = month;
   document.getElementById('hs-to').value = today;
+  document.getElementById('hs-text').addEventListener('input', runHistorySearch);
+  document.getElementById('hs-child').addEventListener('change', runHistorySearch);
+  document.getElementById('hs-from').addEventListener('change', runHistorySearch);
+  document.getElementById('hs-to').addEventListener('change', runHistorySearch);
+  runHistorySearch();
 }
 
 function runHistorySearch() {
@@ -2970,25 +2988,6 @@ window.addEventListener('beforeunload', function() {
 });
 
 // ── Check-in tab ───────────────────────────────────────────
-function ciPickActivity(i) {
-  var act = _ciActivities[i];
-  if (!act || !act.slotKey) return;
-  _ciActivities.forEach(function(a, j) {
-    if (!a || a.slotKey !== act.slotKey) return;
-    a.selected = (j === i);
-    var div = document.getElementById('ci-act-' + j);
-    if (!div) return;
-    var btn = div.querySelector('.ci-pick-btn');
-    if (a.selected) {
-      div.classList.remove('unpicked');
-      if (btn) { btn.textContent = 'Picked \u2713'; btn.classList.add('picked'); }
-    } else {
-      div.classList.add('unpicked');
-      if (btn) { btn.textContent = 'Pick'; btn.classList.remove('picked'); }
-    }
-  });
-  ciScheduleSave();
-}
 
 var _ciActivities = [];
 var _ciParent = 'john';
@@ -3094,49 +3093,49 @@ function renderCheckin() {
   function pushSlotActs(val, slotName, label, childKey, desc) {
     if (!val) return;
     var arr = Array.isArray(val) ? val : [val];
-    var slotKey = slotName + ':' + childKey;
-    arr.forEach(function(title, idx) {
-      initActs.push({ title: title, slot: slotName, label: label, child: childKey, desc: desc, slotKey: slotKey, selected: idx === 0 });
+    arr.forEach(function(title) {
+      initActs.push({ title: title, slot: slotName, label: label, child: childKey, desc: desc });
     });
   }
-  pushSlotActs(wam.ethan, 'wake_learn_am', 'AM Learning', 'ethan', wamDesc);
-  pushSlotActs(wam.elaina, 'wake_learn_am', 'AM Learning', 'elaina', wamDesc);
-  pushSlotActs(wpm.ethan, 'wake_learn_pm', 'PM Learning', 'ethan', wpmDesc);
-  pushSlotActs(wpm.elaina, 'wake_learn_pm', 'PM Learning', 'elaina', wpmDesc);
-  if (ps.event_name) initActs.push({ title: ps.event_name, slot: 'play_start', label: 'Outing', child: 'family', desc: psDesc, slotKey: 'play_start:family', selected: true });
-  if (ot.venue_name || ot.toronto_venue) initActs.push({ title: ot.venue_name || ot.toronto_venue, slot: 'out_together', label: 'Evening', child: 'family', desc: otDesc, slotKey: 'out_together:family', selected: true });
+  function arraysEqual(a, b) {
+    if (!Array.isArray(a) || !Array.isArray(b)) return a === b;
+    if (a.length !== b.length) return false;
+    return a.every(function(x, idx) { return x === b[idx]; });
+  }
+  ['ethan', 'elaina'].forEach(function(kid) {
+    var amVal = wam[kid], pmVal = wpm[kid];
+    var sameSlots = amVal && pmVal && arraysEqual(
+      Array.isArray(amVal) ? amVal : [amVal],
+      Array.isArray(pmVal) ? pmVal : [pmVal]
+    );
+    if (amVal) pushSlotActs(amVal, 'wake_learn_am', sameSlots ? 'Learning' : 'AM Learning', kid, wamDesc);
+    if (pmVal && !sameSlots) pushSlotActs(pmVal, 'wake_learn_pm', 'PM Learning', kid, wpmDesc);
+  });
+  if (ps.event_name) initActs.push({ title: ps.event_name, slot: 'play_start', label: 'Outing', child: 'family', desc: psDesc });
+  if (ot.venue_name || ot.toronto_venue) initActs.push({ title: ot.venue_name || ot.toronto_venue, slot: 'out_together', label: 'Evening', child: 'family', desc: otDesc });
 
-  // If draft exists: override selected state from saved title, add library items
+  // Restore manual library items and ratings from draft
   if (existing && existing.activities && existing.activities.length) {
     existing.activities.forEach(function(saved) {
       if (saved.slot === 'manual') {
         var libIdx = initActs.length;
-        initActs.push({ title: saved.title, slot: 'manual', label: slotLabel('manual'), fromLibrary: true, child: saved.child || 'ethan', desc: '', slotKey: 'manual:' + libIdx, selected: true });
+        initActs.push({ title: saved.title, slot: 'manual', label: slotLabel('manual'), fromLibrary: true, child: saved.child || 'ethan', desc: '' });
         if (saved.rating) _ciRatings[libIdx] = saved.rating;
       } else {
-        var slotKey = saved.slot + ':' + (saved.child || slotChild(saved.slot));
-        var siblings = initActs.filter(function(a) { return a.slotKey === slotKey; });
-        if (siblings.length > 1) {
-          siblings.forEach(function(a) { a.selected = (a.title === saved.title); });
-        }
-        var savedIdx = initActs.findIndex(function(a) { return a.slotKey === slotKey && a.title === saved.title; });
+        var savedIdx = initActs.findIndex(function(a) {
+          return a.slot === saved.slot && (a.child || slotChild(a.slot)) === (saved.child || slotChild(saved.slot)) && a.title === saved.title;
+        });
         if (savedIdx >= 0 && saved.rating) _ciRatings[savedIdx] = saved.rating;
       }
     });
   }
 
-  var slotKeyCounts = {};
-  initActs.forEach(function(a) { if (a.slotKey) slotKeyCounts[a.slotKey] = (slotKeyCounts[a.slotKey] || 0) + 1; });
-
   function actRow(act, i) {
-    var hasSiblings = act.slotKey && (slotKeyCounts[act.slotKey] || 0) > 1;
-    var isUnpicked = hasSiblings && act.selected === false;
-    return '<div class="ci-activity' + (isUnpicked ? ' unpicked' : '') + '" id="ci-act-' + i + '">' +
+    return '<div class="ci-activity" id="ci-act-' + i + '">' +
       '<div class="ci-act-header">' +
       '<span class="ci-act-label">' + act.label + '</span>' +
       '<span class="ci-act-title">' + act.title + '</span>' +
-      (hasSiblings ? '<button class="ci-pick-btn' + (act.selected !== false ? ' picked' : '') + '" onclick="ciPickActivity(' + i + ')">' + (act.selected !== false ? 'Picked \u2713' : 'Pick') + '</button>' : '') +
-      '<label class="ci-done-check"><input type="checkbox" id="ci-done-' + i + '" ' + (isUnpicked ? '' : 'checked') + '> Did it</label>' +
+      '<label class="ci-done-check"><input type="checkbox" id="ci-done-' + i + '"> Did it</label>' +
       (act.fromLibrary ? '<button class="ci-spont-del" onclick="ciRemoveActivity(' + i + ')">x</button>' : '') +
       '</div>' +
       (act.desc ? '<div class="ci-act-desc">' + act.desc + '</div>' : '') +
@@ -3226,7 +3225,7 @@ function renderCheckin() {
           if ((act.child || slotChild(act.slot)) !== (saved.child || slotChild(saved.slot))) return;
           if (act.title !== saved.title) return;
           var dEl = document.getElementById('ci-done-' + i);
-          if (dEl && saved.done === false) dEl.checked = false;
+          if (dEl) dEl.checked = (saved.done === true);
           if (saved.rating) {
             _ciRatings[i] = saved.rating;
             for (var r = 1; r <= 5; r++) {
@@ -3276,7 +3275,7 @@ function renderCheckin() {
       var parentName = c.parent ? (c.parent.charAt(0).toUpperCase() + c.parent.slice(1)) : 'Tiffany';
       var rawLower = rawText.toLowerCase();
       _ciActivities.forEach(function(act, i) {
-        if (!act || act.selected === false) return;
+        if (!act) return;
         if (rawLower.indexOf(act.title.toLowerCase()) === -1) return;
         var div = document.getElementById('ci-act-' + i);
         if (!div) return;
@@ -3429,7 +3428,6 @@ function ciAutoSave() {
   var today = _ciSelectedDate;
   var activities = _ciActivities.map(function(act, i) {
     if (!act) return null;
-    if (act.selected === false) return null; // skip unpicked siblings
     var dEl = document.getElementById('ci-done-' + i); var nEl = document.getElementById('ci-notes-' + i);
     return { title: act.title, slot: act.slot, child: act.child || slotChild(act.slot), done: dEl ? dEl.checked : false, rating: _ciRatings[i] || null, notes: nEl ? nEl.value.trim() : '' };
   }).filter(Boolean);
